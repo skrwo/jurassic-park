@@ -1,123 +1,84 @@
 """
-We collect the dataset containing the information about the dinosaurs (A - Z) from the National History Museum's website.
+We collect the dataset containing the information about the dinosaurs (A - Z) from the National History Museum's API.
 """
-import string
-import requests, re
-from bs4 import BeautifulSoup
-from tqdm import tqdm
+from requests import Session
+from requests.exceptions import HTTPError
+from csv import DictWriter
 
-base_url = "https://www.nhm.ac.uk/discover/dino-directory/name/{}/gallery.html"
-alphabets = list(string.ascii_lowercase)
-header = {'User-Agent':"Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/43.0.2357.134 Safari/537.36"}
+# Filename of the CSV sheet
+sheet_filename: str = "data/data.csv"
 
-data_file = open('data.csv', 'w+')
-data_file.write('name' + ',' + 'diet' + ',' + 'period' + ',' + 'lived_in' + ',' + 'type' + ',' + 'length'
-                + ',' + 'taxonomy' + ',' + 'named_by' + ',' + 'species' + ',' + 'link' + '\n')
+# Determines whether list of dinosaurs will include the full information (False)
+# (and we won't fetch each dino's info separately), or just names (True).
+# Default (False) means it will.
+use_short_dino_list: bool = False
 
-class JurassicPark:
-    def __init__(self, letter):
-        self.letter = letter
+session = Session()
 
-    def read_a_page(self, link):
-        page = requests.get(link)
-        soup = BeautifulSoup(page.content, 'html.parser')
-        return soup
-    
-    def get_dino_urls(self):
-        lst_of_dinos = []
-        url = base_url.format(self.letter)
-        soup = self.read_a_page(url)
-        dino_urls = soup.find_all('li', attrs={'class':'dinosaurfilter--dinosaur'})
-        for ix, dino_url in enumerate(dino_urls):
-            dino_link = str(dino_url).split('href')[-1].split('">\n')[0].replace('="', '')
-            lst_of_dinos.append(dino_link)
-        return lst_of_dinos
-    
-    def get_dino_data_per_url(self):
-        lst_of_dinos = self.get_dino_urls()
+def get_dinosaurs_list(short: bool) -> list[dict]:
+    """Fetches dinosaurs list from the National History Museum's API"""
+    # 'short' param adds ?view=genus query which makes the response much smaller
+    # (we must fetch each dino's details then, but we get the list a lot faster)
+    # may be very slow without the 'short' param.
+    parameters = {"view": "genus"} if short else None
+    response = session.get("https://www.nhm.ac.uk/api/dino-directory-api/dinosaurs", params=parameters)
+    response.raise_for_status()
 
-        dinos = []
+    return response.json()
 
-        for ix, dino in enumerate(lst_of_dinos):
-            dino_data = {}
-            
-            diet_data = []
-            taxonomy_data = []
-            typ_length_data = []
+# not needed if ?view=genus in get_dinosaurs_list() is not used
+# may be less reliable due to random 504 responses
+def get_dinosaur_details(genus: str) -> dict[str, object]:
+    """Fetches dinosaur's details from the National History Museum's API using its genus"""
+    response = session.get(f"https://www.nhm.ac.uk/api/dino-directory-api/dinosaurs/{dino}")
+    response.raise_for_status()
 
-            soup = self.read_a_page(dino)
+    return response.json()
 
-            type_length = soup.find_all('dl', attrs={'class':'dinosaur--description dinosaur--list'})
-            diet = soup.find_all('div', attrs={'class':'dinosaur--info-container small-12 medium-12 large-7 columns'})
-            taxonomy = soup.find_all('div', attrs={'class':'dinosaur--taxonomy-container small-12 medium-12 large-12 columns'})
-            name = dino.split('/')[-1].split('.')[0]
-            
-            type_ = str(type_length).split('<dd>')[-2].split('.html">')[-1].split('</a>')[0].strip()
-            length = str(type_length).split('<dd>')[-1].split('</dd>')[0].strip()
+with open(sheet_filename, "w", encoding="utf-8") as file:
+    fields = ("name", "diet", "period", "lived_in", "type", "length", "taxonomy", "named_by", "species", "link")
 
-            for vals in str(type_length).split('<dd>'):
-                lines = vals.split('">')[-1].split('</dd>')[0].split('</a>')[0].strip()
-                if not bool(BeautifulSoup(lines, "html.parser").find()):
-                    if 'kg' not in lines:
-                        typ_length_data.append(lines)
+    sheetwriter = DictWriter(file, fields, lineterminator="\n")
+    sheetwriter.writeheader()
 
-            for vals in str(diet).split('<dd>'):
-                lines = vals.split('">')[-1].split('</a>')[0]
-                period = vals.split('">')[-1].split(', ')[-1].split('</dd>')[0]
-                if not bool(BeautifulSoup(lines, "html.parser").find()):
-                    if lines not in period:
-                        lines = lines + ' ' + period
-                    diet_data.append(lines)
+    print("Getting dinosaurs list...")
+    dinosaurs_list = get_dinosaurs_list(use_short_dino_list)
 
-            for vals in str(taxonomy).split('<dd>'):
-                lines = vals.split('">')[-1].split('</a>')[0].split('</dd>')[0]
-                if not bool(BeautifulSoup(lines, "html.parser").find()):
-                    taxonomy_data.append(lines)
-           
-            dino_data["name"] = name
-            dino_data["diet"] = diet_data[0]
-            dino_data["period"] = diet_data[1]
-            try:
-                dino_data["lived_in"] = diet_data[2]
-            except:
-                dino_data["lived_in"] = ""
-            dino_data["type"] = typ_length_data[0]
-            try:
-                dino_data["length"] = typ_length_data[1]
-            except:
-                dino_data["length"] = ""
-            dino_data["taxonomy"] = taxonomy_data[0]
-            dino_data["named_by"] = taxonomy_data[1]
-            try:
-                dino_data["species"] = taxonomy_data[2]
-            except:
-                dino_data["species"] = ""
-            dino_data['link'] = dino
-            dinos.append(dino_data)
-            print(dino_data)
-            print('='*50)
+    for dino in dinosaurs_list:
 
-        return dinos
+        genus = dino["genus"].lower()
 
-for ix, alphabet in tqdm(enumerate(alphabets)):
-    jr = JurassicPark(alphabet)
-    dinos = jr.get_dino_data_per_url()
-    
-    for jx, dino in enumerate(dinos):
-        name = dino["name"].replace(',', '')
-        diet = dino["diet"].replace(',', '')
-        period = dino["period"].replace(',', '')
-        lived_in = dino["lived_in"].replace(',', '')
-        typ = dino["type"].replace(',', '')
-        length = dino["length"].replace(',', '')
-        taxonomy = dino["taxonomy"].replace(',', '')
-        named_by = dino["named_by"].replace(',', '')
-        species = dino["species"].replace(',', '')
-        link = dino["link"].replace(',', '')
+        print(f"Getting {genus} details...")
+        try:
+            details = dino if not use_short_dino_list else get_dinosaur_details(genus)
+        except HTTPError:
+            print(f"Skipped {genus} due to HTTP error...")
+            continue
 
-        data_file.write(name + ',' + diet + ',' + period + ','
-                + lived_in + ',' + typ + ',' + length + ',' + 
-                taxonomy + ',' + named_by + ',' + species + ',' + link)
-        data_file.write('\n')
-    
-data_file.close()
+        period = details["period"]
+        period_years = tuple(
+            map(lambda x: int(x) if x else None,
+                (details["myaFrom"], details["myaTo"]))
+        )
+        period_years_text = (
+            f"{period_years[0]}-{period_years[1]} million years ago"
+        ) if (period_years[0] or period_years[1]) else ""
+
+        row = {
+            "name": genus,
+            "diet": details["dietTypeName"],
+            "period":
+                f'{period["period"] if period else ""} {period_years_text}'.strip(),
+            "lived_in": details["countries"][0]["country"],
+            "type": details["bodyShape"]["bodyShape"].lower(),
+            "length": f'{details["lengthFrom"]}m',
+            "taxonomy": details["taxTaxon"]["taxonomyCSV"].replace(",", " "),
+            "named_by": f'{details["genusNamedBy"]} ({details["genusYear"]})',
+            "species": details["species"],
+            "link": f'https://www.nhm.ac.uk/discover/dino-directory/{genus}.html'
+        }
+        try:
+            sheetwriter.writerow(row)
+        except Exception as e:
+            print(f"! ERROR on {genus}: {e!r}")
+            print("! Row data:", row)
