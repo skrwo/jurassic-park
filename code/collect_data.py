@@ -30,7 +30,7 @@ def get_dinosaurs_list(short: bool) -> list[dict]:
 # may be less reliable due to random 504 responses
 def get_dinosaur_details(genus: str) -> dict[str, object]:
     """Fetches dinosaur's details from the National History Museum's API using its genus"""
-    response = session.get(f"https://www.nhm.ac.uk/api/dino-directory-api/dinosaurs/{dino}")
+    response = session.get(f"https://www.nhm.ac.uk/api/dino-directory-api/dinosaurs/{genus}")
     response.raise_for_status()
 
     return response.json()
